@@ -37,7 +37,7 @@ function buildItem($, card, id) {
 
   const synopsis = (text.match(/SYNOPSIS\s*(.*?)\s*▸\s*FULL CAST/) || [])[1] || "";
 
-  return { id, title, poster, date, platform, synopsis };
+  return { id, title, poster, date, platform, synopsis, rawText: text.slice(0, 400) };
 }
 
 function parseList(html) {
