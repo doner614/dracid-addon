@@ -1,0 +1,14 @@
+{
+  "name": "dracid-lists-custom-addon",
+  "version": "1.0.0",
+  "description": "Addon Stremio baseado nas listas de dracid77.github.io/lists, com badges nos posters e filtro streaming/VOD",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "express": "^4.19.2",
+    "sharp": "^0.33.5",
+    "stremio-addon-sdk": "^1.6.10"
+  }
+}
