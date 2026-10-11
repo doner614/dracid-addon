@@ -67,7 +67,14 @@ function rowInfo($, card) {
   return null;
 }
 
-const cleanPlatform = p => (p ? p.replace(/\s+/g, " ").replace(/\s+with\s+Showtime$/i, "").trim() || null : null);
+// Limpa o nome da plataforma/canal (inclui gralhas e variantes que existem nas listas do site)
+const FIXES = [[/^Dsiney\+$/i, "Disney+"], [/^Channel\s?4$/i, "Channel 4"], [/^CraveTV$/i, "Crave"]];
+const cleanPlatform = p => {
+  if (!p) return null;
+  let n = p.replace(/\s+/g, " ").replace(/\s+with\s+Showtime$/i, "").trim();
+  for (const [re, to] of FIXES) if (re.test(n)) n = to;
+  return n || null;
+};
 
 function buildItem($, card, id, kind) {
   const cfg = KINDS[kind];
