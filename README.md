@@ -20,7 +20,13 @@ Variáveis: `PORT` (7000), `BASE_URL`, `CACHE_MINUTES` (30), `TMDB_API_KEY`, `CO
 ## Como funciona a lista Released
 O site marca com plataforma (streaming ou VOD) os títulos de **Upcoming**. O addon guarda esses títulos num histórico
 e, **no dia da data de lançamento**, passam de Upcoming para Released. Os títulos que o site já marca na sua lista
-Released também entram no histórico. Sem plataforma = cinema, nunca entra.
+Released também entram no histórico.
+
+## VOD que já saiu (TMDB)
+A lista Released do site não marca VOD. Com `TMDB_API_KEY` definida, o addon consulta o TMDB para os títulos dessa
+lista sem plataforma e, se já existir versão digital (streaming, aluguer ou compra) no país `COUNTRY` (padrão `US`),
+junta-os ao histórico com a data do lançamento digital. Repete a verificação a cada `CHECK_HOURS` (24) horas,
+por isso os que passam a VOD mais tarde também entram. O que o site marca tem sempre prioridade.
 
 ## Histórico persistente (Gist)
 O Render gratuito apaga a memória e o disco quando reinicia, por isso o histórico fica num GitHub Gist:
