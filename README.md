@@ -17,12 +17,18 @@ O Stremio exige HTTPS fora do localhost. Define `BASE_URL=https://o-teu-dominio`
 
 Variáveis: `PORT` (7000), `BASE_URL`, `CACHE_MINUTES` (30), `TMDB_API_KEY`, `COUNTRY` (US).
 
-## TMDB (para a lista de lançados)
-O site só marca plataforma em ~10% dos filmes lançados. Com `TMDB_API_KEY` definida, o addon consulta o TMDB e
-mantém os filmes que já estão em streaming ou VOD (aluguer/compra digital) no país `COUNTRY` (ex.: US, PT).
-Serve a chave "API Key" (v3) ou o "API Read Access Token". O enriquecimento corre em segundo plano
-(~1–2 min após arrancar), por isso o catálogo vai crescendo. Sem chave, só aparecem os títulos que o site já marca.
+## Como funciona a lista Released
+O site marca com plataforma (streaming ou VOD) os títulos de **Upcoming**. O addon guarda esses títulos num histórico
+e, **no dia da data de lançamento**, passam de Upcoming para Released. Os títulos que o site já marca na sua lista
+Released também entram no histórico. Sem plataforma = cinema, nunca entra.
 
-## Notas
-- Os posters usam a fonte DejaVu Sans/Arial. Se o servidor não tiver fontes instaladas, o texto do badge pode aparecer em quadrados (em Docker: `apt-get install -y fontconfig fonts-dejavu-core`).
-- Itens sem link IMDb na lista são ignorados (o Stremio precisa do ID `tt...`).
+## Histórico persistente (Gist)
+O Render gratuito apaga a memória e o disco quando reinicia, por isso o histórico fica num GitHub Gist:
+1. Em https://gist.github.com cria um gist **secreto** com o ficheiro `released.json` e o conteúdo `{"items":[]}`.
+   O ID do gist é a parte final do URL.
+2. Em https://github.com/settings/tokens cria um token (classic) só com a permissão **gist**.
+3. No Render, em Environment: `GIST_ID` (ID do gist) e `GITHUB_TOKEN` (o token).
+
+Sem isto o addon funciona, mas o histórico perde-se sempre que o serviço reinicia.
+Para o serviço não adormecer (e o histórico atualizar de 30 em 30 minutos), usa um ping gratuito (ex.: UptimeRobot)
+a abrir `/manifest.json` de 5 em 5 minutos.

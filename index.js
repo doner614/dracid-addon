@@ -2,21 +2,69 @@ const express = require("express");
 const { addonBuilder, getRouter } = require("stremio-addon-sdk");
 const { scrapeList } = require("./scraper");
 const { badgePoster } = require("./poster");
-const tmdb = require("./tmdb");
+const gist = require("./gist");
 
 const PORT = process.env.PORT || 7000;
 // URL público do addon (tem de ser alcançável pelo Stremio, é daqui que saem os posters com badge)
 const BASE_URL = (process.env.BASE_URL || `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
 const CACHE_MS = (parseInt(process.env.CACHE_MINUTES, 10) || 30) * 60 * 1000;
-const COUNTRY = (process.env.COUNTRY || "US").toUpperCase(); // país usado para plataformas/lançamento digital no TMDB
-const TMDB_TTL_MS = 24 * 60 * 60 * 1000;
 const PAGE_SIZE = 100;
 
 const SITE = "https://dracid77.github.io/lists";
 const LISTS = {
-  "upcoming-movies": { url: `${SITE}/upcoming-movies`, name: "Upcoming Movies (badges)", badge: true,  onlyStreamingVod: false },
-  "released-movies": { url: `${SITE}/released-movies`, name: "2026 Released Movies (Streaming/VOD)", badge: false, onlyStreamingVod: true }
+  "upcoming-movies": { url: `${SITE}/upcoming-movies`, name: "Upcoming Movies (badges)" },
+  "released-movies": { url: `${SITE}/released-movies`, name: "2026 Released Movies (Streaming/VOD)" }
 };
+
+// ---------- Histórico (store) ----------
+// Guarda todos os títulos que o site marcou com plataforma (streaming ou VOD).
+// Um título entra na lista "Released" no dia da sua data de lançamento digital.
+const store = { items: {}, loadOk: false, lastSaved: null, error: null };
+
+async function ensureLoaded() {
+  if (store.loadOk || !gist.enabled) return;
+  try {
+    const data = await gist.load();
+    (data.items || []).forEach(i => { if (!store.items[i.id]) store.items[i.id] = i; });
+    store.loadOk = true;
+    store.error = null;
+  } catch (e) {
+    store.error = "load: " + e.message;
+    console.error("Erro a carregar o histórico:", e.message);
+  }
+}
+
+let saveTimer = null;
+function scheduleSave() {
+  if (!gist.enabled) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    await ensureLoaded();
+    if (!store.loadOk) return; // nunca grava sem ter carregado antes (evita apagar o histórico)
+    try {
+      await gist.save({ version: 1, items: Object.values(store.items) });
+      store.lastSaved = new Date().toISOString();
+      store.error = null;
+    } catch (e) {
+      store.error = "save: " + e.message;
+      console.error("Erro a gravar o histórico:", e.message);
+    }
+  }, 5000);
+}
+
+const FIELDS = ["tmdbId", "title", "poster", "platform", "date", "synopsis"];
+function mergeIntoStore(items) {
+  let changed = false;
+  for (const it of items) {
+    if (!it.platform) continue; // sem plataforma = cinema, não entra
+    const prev = store.items[it.id];
+    if (!prev || FIELDS.some(f => prev[f] !== it[f])) {
+      store.items[it.id] = { id: it.id, ...Object.fromEntries(FIELDS.map(f => [f, it[f]])), firstSeen: prev ? prev.firstSeen : new Date().toISOString() };
+      changed = true;
+    }
+  }
+  if (changed) scheduleSave();
+}
 
 // ---------- Cache das listas (scraping) ----------
 const cache = {};
@@ -26,6 +74,7 @@ async function getRawList(key) {
   try {
     const items = await scrapeList(LISTS[key].url);
     cache[key] = { items, time: Date.now() };
+    mergeIntoStore(items); // tanto a Upcoming como a Released alimentam o histórico
     return items;
   } catch (e) {
     console.error(`Erro a ler ${key}:`, e.message);
@@ -33,50 +82,27 @@ async function getRawList(key) {
   }
 }
 
-// ---------- Enriquecimento com o TMDB (em segundo plano) ----------
-const tmdbCache = new Map(); // tmdbId -> { platform, time }
-const info = { enriching: false, done: 0, total: 0, lastError: null };
+const isPast = i => new Date(i.date).getTime() <= Date.now();
 
-const platformOf = i => i.platform || (tmdbCache.get(i.tmdbId) || {}).platform || null;
-
-async function enrich(raw) {
-  if (!tmdb.enabled || info.enriching) return;
-  const now = Date.now();
-  const todo = raw.filter(i => !i.platform && i.tmdbId && !(tmdbCache.get(i.tmdbId) && now - tmdbCache.get(i.tmdbId).time < TMDB_TTL_MS));
-  if (!todo.length) return;
-
-  Object.assign(info, { enriching: true, done: 0, total: todo.length });
-  let idx = 0;
-  const worker = async () => {
-    while (idx < todo.length) {
-      const it = todo[idx++];
-      try {
-        tmdbCache.set(it.tmdbId, { platform: await tmdb.lookup(it.tmdbId, COUNTRY), time: Date.now() });
-      } catch (e) {
-        info.lastError = e.message;
-        if (/HTTP 40[13]/.test(e.message)) idx = todo.length; // chave inválida: pára
-      }
-      info.done++;
-    }
-  };
-  try { await Promise.all(Array.from({ length: 8 }, worker)); }
-  finally { info.enriching = false; }
-}
-
-// Lista final de cada catálogo
 async function getList(key) {
-  const raw = await getRawList(key);
-  if (!LISTS[key].onlyStreamingVod) return raw;
-  enrich(raw); // não espera: o catálogo vai enchendo à medida que o TMDB responde
-  return raw.map(i => ({ ...i, platform: platformOf(i) })).filter(i => i.platform);
+  await ensureLoaded();
+  const [upcoming] = await Promise.all([getRawList("upcoming-movies"), getRawList("released-movies")]);
+
+  // Upcoming: só datas futuras (no dia do lançamento, o título passa para Released)
+  if (key === "upcoming-movies") return upcoming.filter(i => !isPast(i));
+
+  // Released: tudo o que o histórico tem com data já passada, do mais recente para o mais antigo
+  return Object.values(store.items)
+    .filter(isPast)
+    .sort((a, b) => b.date.localeCompare(a.date) || (a.title || "").localeCompare(b.title || ""));
 }
 
 // ---------- Manifest ----------
 const manifest = {
   id: "community.dracid.lists.custom",
-  version: "1.1.0",
+  version: "2.0.0",
   name: "Dracid's Lists (custom)",
-  description: "Listas de lançamentos digitais com badges de plataforma/data e filtro streaming/VOD",
+  description: "Listas de lançamentos digitais com badges de plataforma/data; os títulos passam para Released no dia do lançamento",
   resources: ["catalog"],
   types: ["movie"],
   catalogs: Object.entries(LISTS).map(([id, l]) => ({
@@ -99,14 +125,13 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     id: i.id, // IMDb ID → o Stremio vai buscar o resto dos detalhes ao Cinemeta
     type: "movie",
     name: i.title,
-    poster: LISTS[id].badge && i.poster ? `${BASE_URL}/poster/${id}/${i.id}.jpg` : i.poster,
+    poster: i.poster ? `${BASE_URL}/poster/${id}/${i.id}.jpg` : i.poster, // badge em ambas as listas
     description: [i.platform, i.synopsis].filter(Boolean).join(" — "),
-    releaseInfo: new Date(i.date).getUTCFullYear().toString(),
-    released: i.date
+    releaseInfo: new Date(i.date).getUTCFullYear().toString()
+    // sem "released": no Stremio esse campo é a estreia em cinema e faz aparecer a etiqueta "IN CINEMA"
   }));
 
-  // Enquanto o TMDB ainda está a responder, o Stremio volta a pedir mais cedo
-  return { metas, cacheMaxAge: info.enriching ? 60 : 3600 };
+  return { metas, cacheMaxAge: 1800 };
 });
 
 // ---------- Servidor ----------
@@ -118,7 +143,8 @@ app.get("/poster/:list/:imdb.jpg", async (req, res) => {
   const { list, imdb } = req.params;
   if (!LISTS[list]) return res.sendStatus(404);
 
-  const item = (await getList(list)).find(i => i.id === imdb);
+  await ensureLoaded();
+  const item = store.items[imdb] || (await getRawList(list)).find(i => i.id === imdb);
   if (!item || !item.poster) return res.sendStatus(404);
 
   const key = `${imdb}|${item.platform}|${item.date}`;
@@ -144,26 +170,29 @@ app.get("/debug/:list", async (req, res) => {
 
   const raw = await getRawList(key);
   const kept = await getList(key);
-  const effective = LISTS[key].onlyStreamingVod ? raw.map(i => ({ ...i, platform: platformOf(i) })) : raw;
-
+  const all = Object.values(store.items);
   const platforms = {};
-  effective.forEach(i => { const p = i.platform || "(nenhuma)"; platforms[p] = (platforms[p] || 0) + 1; });
-  const dropped = effective.filter(i => !i.platform);
+  kept.forEach(i => { const p = i.platform || "(nenhuma)"; platforms[p] = (platforms[p] || 0) + 1; });
 
   res.json({
-    rawCount: raw.length,
-    keptCount: kept.length,
-    tmdb: { enabled: tmdb.enabled, country: COUNTRY, ...info, cached: tmdbCache.size },
+    rawCount: raw.length,        // o que o scraper leu da página
+    keptCount: kept.length,      // o que o catálogo mostra
     platforms,
-    droppedSample: Array.from({ length: Math.min(4, dropped.length) }, (_, n) => dropped[Math.floor(n * dropped.length / 4)])
-      .map(i => ({ id: i.id, title: i.title, date: i.date, tmdbId: i.tmdbId })),
-    sample: kept.slice(0, 2).map(i => ({ id: i.id, title: i.title, platform: i.platform, date: i.date }))
+    history: {
+      total: all.length,
+      released: all.filter(isPast).length,
+      waitingForReleaseDate: all.filter(i => !isPast(i)).length,
+      persistence: { enabled: gist.enabled, loaded: store.loadOk, lastSaved: store.lastSaved, error: store.error }
+    },
+    sample: kept.slice(0, 3).map(i => ({ id: i.id, title: i.title, platform: i.platform, date: i.date }))
   });
 });
 
 app.use(getRouter(builder.getInterface()));
 
-app.listen(PORT, () => {
-  console.log(`Addon em ${BASE_URL}/manifest.json (TMDB ${tmdb.enabled ? "ativo, país " + COUNTRY : "desligado"})`);
-  Object.keys(LISTS).forEach(k => getList(k)); // aquece a cache e arranca o enriquecimento
+app.listen(PORT, async () => {
+  console.log(`Addon em ${BASE_URL}/manifest.json (histórico ${gist.enabled ? "no Gist" : "só em memória"})`);
+  await ensureLoaded();
+  getList("released-movies").catch(() => {});
+  setInterval(() => getList("released-movies").catch(() => {}), CACHE_MS + 1000); // mantém o histórico a atualizar
 });
