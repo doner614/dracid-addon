@@ -5,12 +5,16 @@ const isToken = KEY.length > 40; // "API Read Access Token" (JWT) vs chave v3 (3
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// Serviços de TV em direto: não são streaming a pedido, por isso não contam como plataforma
+const LIVE_TV = /^(Philo|fuboTV|Sling TV|DIRECTV|YouTube TV|Spectrum On Demand|Hulu \+ Live TV)$/i;
+
 function normalize(name) {
   return name
+    .replace(/\s+Amazon Channel$/i, "")       // "HBO Max Amazon Channel" -> "HBO Max"
     .replace(/\s+(Standard\s+)?with Ads$/i, "")
-    .replace(/^Amazon Prime Video$/i, "Prime Video")
-    .replace(/^Amazon Video$/i, "Prime Video")
-    .replace(/\s+Plus$/i, "+")
+    .replace(/\s+Premium$/i, "")              // "Paramount Plus Premium", "Peacock Premium"
+    .replace(/^Amazon (Prime )?Video$/i, "Prime Video")
+    .replace(/\s+Plus$/i, "+")                // "Apple TV Plus" -> "Apple TV+"
     .trim();
 }
 
@@ -19,7 +23,8 @@ function normalize(name) {
 function classify(data, country, now = new Date()) {
   const providers = (data["watch/providers"] || {}).results || {};
   const p = providers[country] || {};
-  if (p.flatrate && p.flatrate.length) return normalize(p.flatrate[0].provider_name);
+  const stream = (p.flatrate || []).find(x => !LIVE_TV.test(x.provider_name));
+  if (stream) return normalize(stream.provider_name);
   if ((p.rent && p.rent.length) || (p.buy && p.buy.length)) return "VOD";
 
   const rd = ((data.release_dates || {}).results || []).find(r => r.iso_3166_1 === country);
