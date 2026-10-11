@@ -15,7 +15,14 @@ const COLORS = {
   "paramount+": ["#0064FF", "#fff"],
   "peacock": ["#111", "#fff"],
   "shudder": ["#C8102E", "#fff"],
-  "vod": ["#F5A623", "#111"]
+  "vod": ["#F5A623", "#111"],
+  "fx": ["#1a1a1a", "#fff"],
+  "crave": ["#0AA0E6", "#fff"],
+  "mgm+": ["#B8860B", "#fff"],
+  "amc+": ["#1F6FEB", "#fff"],
+  "starz": ["#111", "#fff"],
+  "showtime": ["#B80000", "#fff"],
+  "vix": ["#F26A21", "#fff"]
 };
 
 const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -34,11 +41,12 @@ function makeSvg(platform, iso) {
   let dateX = 20;
 
   if (platform) {
-    const name = platform.toUpperCase().slice(0, 14);
+    const name = platform.toUpperCase().slice(0, 16);
     const [bg, fg] = COLORS[platform.toLowerCase()] || ["#444", "#fff"];
-    const pw = name.length * 21 + 34;
+    const fs = name.length > 11 ? 24 : 30;          // nomes longos usam letra mais pequena
+    const pw = Math.round(name.length * fs * 0.7) + 34;
     pill = `<rect x="16" y="${y0 + 18}" width="${pw}" height="64" rx="14" fill="${bg}"/>
-      <text x="${16 + pw / 2}" y="${y0 + 60}" text-anchor="middle" font-size="30" font-weight="700" fill="${fg}">${esc(name)}</text>`;
+      <text x="${16 + pw / 2}" y="${y0 + 60}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${fg}">${esc(name)}</text>`;
     dateX = 16 + pw + 18;
   }
 

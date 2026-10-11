@@ -1,5 +1,7 @@
 # Dracid's Lists (custom)
 
+Catálogos: Upcoming Movies, Released Movies, Upcoming Series, Released Series (todos com badge de plataforma/canal e data).
+
 Addon Stremio que lê https://dracid77.github.io/lists e:
 - **Upcoming Movies**: poster com badge (plataforma + data de lançamento).
 - **Released Movies**: só títulos com plataforma (streaming ou VOD).
@@ -38,3 +40,7 @@ O Render gratuito apaga a memória e o disco quando reinicia, por isso o histór
 Sem isto o addon funciona, mas o histórico perde-se sempre que o serviço reinicia.
 Para o serviço não adormecer (e o histórico atualizar de 30 em 30 minutos), usa um ping gratuito (ex.: UptimeRobot)
 a abrir `/manifest.json` de 5 em 5 minutos.
+
+## Ping (manter o Render acordado)
+`/health` responde "ok" sem fazer scraping. Cria um monitor gratuito (UptimeRobot ou cron-job.org) a abrir
+`https://o-teu-servico.onrender.com/health` de 5 em 5 minutos.
