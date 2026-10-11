@@ -14,11 +14,12 @@ const COUNTRY = (process.env.COUNTRY || "US").toUpperCase(); // país usado no T
 const CHECK_MS = (parseInt(process.env.CHECK_HOURS, 10) || 24) * 60 * 60 * 1000;
 
 const SITE = "https://dracid77.github.io/lists";
+// A ordem aqui é a ordem dos catálogos no Stremio
 const LISTS = {
-  "upcoming-movies": { kind: "movie",  phase: "upcoming", url: `${SITE}/upcoming-movies`, name: "Upcoming Movies (badges)" },
-  "released-movies": { kind: "movie",  phase: "released", url: `${SITE}/released-movies`, name: "Released Movies (Streaming/VOD)" },
-  "upcoming-series": { kind: "series", phase: "upcoming", url: `${SITE}/upcoming-series`, name: "Upcoming Series (badges)" },
-  "released-series": { kind: "series", phase: "released", url: `${SITE}/released-series`, name: "Released Series (Streaming/TV)" }
+  "released-movies": { kind: "movie",  phase: "released", url: `${SITE}/released-movies`, name: "Released Movies" },
+  "upcoming-movies": { kind: "movie",  phase: "upcoming", url: `${SITE}/upcoming-movies`, name: "Upcoming Movies" },
+  "released-series": { kind: "series", phase: "released", url: `${SITE}/released-series`, name: "Released Series" },
+  "upcoming-series": { kind: "series", phase: "upcoming", url: `${SITE}/upcoming-series`, name: "Upcoming Series" }
 };
 const listKey = (kind, phase) => `${phase}-${kind === "movie" ? "movies" : "series"}`;
 
@@ -163,7 +164,7 @@ async function getList(key) {
 // ---------- Manifest ----------
 const manifest = {
   id: "community.dracid.lists.custom",
-  version: "3.0.0",
+  version: "3.1.0",
   name: "Dracid's Lists (custom)",
   description: "Listas de lançamentos digitais (filmes e séries) com badges de plataforma/data; os títulos passam para Released no dia do lançamento",
   resources: ["catalog"],
