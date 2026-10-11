@@ -113,7 +113,9 @@ app.get("/debug/:list", async (req, res) => {
     rawCount: raw.length,          // tudo o que o scraper encontrou na página
     keptCount: kept.length,        // o que o catálogo mostra (depois do filtro)
     platforms,                     // contagem por plataforma
-    droppedSample: dropped.slice(0, 4).map(i => ({ id: i.id, title: i.title, date: i.date, rawText: i.rawText })),
+    // 6 descartados espalhados pela lista (novos e antigos), só o início do cartão
+    droppedSample: Array.from({ length: Math.min(6, dropped.length) }, (_, n) => dropped[Math.floor(n * dropped.length / 6)])
+      .map(i => ({ id: i.id, title: i.title, date: i.date, rawText: (i.rawText || "").slice(0, 150) })),
     sample: kept.slice(0, 2).map(i => ({ id: i.id, title: i.title, platform: i.platform, date: i.date }))
   });
 });

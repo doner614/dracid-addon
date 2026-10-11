@@ -4,7 +4,7 @@
 const cheerio = require("cheerio");
 
 const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
-const DATE_RE = /(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})/;
+const DATE_RE = /(\d+)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})/;
 const GENRE_RE = /Action|Adventure|Animation|Comedy|Crime|Documentary|Drama|Family|Fantasy|History|Horror|Music|Mystery|Romance|Science Fiction|Thriller|TV Movie|War|Western/;
 const IMDB_SEL = 'a[href*="imdb.com/title/tt"]';
 
@@ -20,7 +20,12 @@ function buildItem($, card, id) {
   const text = card.text().replace(/\s+/g, " ").trim();
 
   const m = text.match(DATE_RE);
-  const date = new Date(Date.UTC(+m[3], MONTHS[m[2].toLowerCase()], +m[1])).toISOString();
+  // Sem duração no cartão, o ano do filme cola-se ao dia ("20268 Oct 2026" = ano 2026 + dia 8)
+  let run = m[1];
+  if (run.length > 2) run = /^(19|20)\d\d/.test(run) ? run.slice(4) : run.slice(-2);
+  let day = parseInt(run, 10);
+  if (!(day >= 1 && day <= 31)) day = parseInt(run.slice(-1), 10) || 1;
+  const date = new Date(Date.UTC(+m[3], MONTHS[m[2].toLowerCase()], day)).toISOString();
 
   // O texto logo a seguir à data é "<plataforma><géneros...>"; cortamos no primeiro género.
   const afterDate = text.slice(m.index + m[0].length).trim();
