@@ -31,7 +31,9 @@ function buildItem($, card, id) {
   const afterDate = text.slice(m.index + m[0].length).trim();
   const platform = afterDate.split(GENRE_RE)[0].replace(/\s+/g, " ").trim() || null;
 
-  const title = card.find('a[href*="themoviedb.org/movie"]').first().text().trim();
+  const tmdbLink = card.find('a[href*="themoviedb.org/movie"]').first();
+  const title = tmdbLink.text().trim();
+  const tmdbId = ((tmdbLink.attr("href") || "").match(/movie\/(\d+)/) || [])[1] || null;
 
   let poster = card
     .find("img")
@@ -42,7 +44,7 @@ function buildItem($, card, id) {
 
   const synopsis = (text.match(/SYNOPSIS\s*(.*?)\s*▸\s*FULL CAST/) || [])[1] || "";
 
-  return { id, title, poster, date, platform, synopsis, rawText: text.slice(0, 400) };
+  return { id, tmdbId, title, poster, date, platform, synopsis, rawText: text.slice(0, 400) };
 }
 
 function parseList(html) {
