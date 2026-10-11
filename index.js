@@ -17,18 +17,23 @@ const LISTS = {
 
 // ---------- Cache das listas ----------
 const cache = {};
-async function getList(key) {
+async function getRawList(key) {
   const c = cache[key];
   if (c && Date.now() - c.time < CACHE_MS) return c.items;
   try {
-    let items = await scrapeList(LISTS[key].url);
-    if (LISTS[key].onlyStreamingVod) items = items.filter(i => i.platform); // só títulos com plataforma (streaming ou VOD)
+    const items = await scrapeList(LISTS[key].url);
     cache[key] = { items, time: Date.now() };
     return items;
   } catch (e) {
     console.error(`Erro a ler ${key}:`, e.message);
     return c ? c.items : [];
   }
+}
+
+async function getList(key) {
+  const items = await getRawList(key);
+  // só títulos com plataforma (streaming ou VOD)
+  return LISTS[key].onlyStreamingVod ? items.filter(i => i.platform) : items;
 }
 
 // ---------- Manifest ----------
@@ -99,8 +104,18 @@ app.get("/poster/:list/:imdb.jpg", async (req, res) => {
 // Para verificar se o scraping está a funcionar: /debug/upcoming-movies
 app.get("/debug/:list", async (req, res) => {
   if (!LISTS[req.params.list]) return res.sendStatus(404);
-  const items = await getList(req.params.list);
-  res.json({ count: items.length, withPlatform: items.filter(i => i.platform).length, sample: items.slice(0, 3) });
+  const raw = await getRawList(req.params.list);
+  const kept = await getList(req.params.list);
+  const dropped = raw.filter(i => !i.platform);
+  const platforms = {};
+  raw.forEach(i => { const p = i.platform || "(nenhuma)"; platforms[p] = (platforms[p] || 0) + 1; });
+  res.json({
+    rawCount: raw.length,          // tudo o que o scraper encontrou na página
+    keptCount: kept.length,        // o que o catálogo mostra (depois do filtro)
+    platforms,                     // contagem por plataforma
+    droppedSample: dropped.slice(0, 5).map(i => ({ id: i.id, title: i.title, date: i.date })),
+    sample: kept.slice(0, 2).map(i => ({ id: i.id, title: i.title, platform: i.platform, date: i.date }))
+  });
 });
 
 app.use(getRouter(builder.getInterface()));
