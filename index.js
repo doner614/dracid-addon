@@ -220,6 +220,13 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 
 // ---------- Ficha (meta): Cinemeta + poster com badge ----------
 const metaCache = new Map();
+const metaLog = { total: 0, answered: 0, since: new Date().toISOString(), last: [] }; // para /debug/meta
+const logMeta = (type, id, answered, source) => {
+  metaLog.total++;
+  if (answered) metaLog.answered++;
+  metaLog.last.unshift({ time: new Date().toISOString(), type, id, answered, source });
+  if (metaLog.last.length > 15) metaLog.last.pop();
+};
 async function cinemetaMeta(type, id) {
   const key = type + id;
   const c = metaCache.get(key);
@@ -255,13 +262,14 @@ builder.defineMetaHandler(async ({ type, id }) => {
     item = upcoming.find(i => i.id === id);
     if (item) list = listKey(type, "upcoming");
   }
-  if (!item || !list || !item.poster) return { meta: null };
+  if (!item || !list || !item.poster) { logMeta(type, id, false, "fora das nossas listas"); return { meta: null }; }
 
   const poster = `${BASE_URL}/poster/${list}/${id}.jpg`;
   const base = await cinemetaMeta(type, id);
   const meta = base
     ? { ...base, poster }
     : { id, type, name: item.title, poster, description: [item.platform, item.synopsis].filter(Boolean).join(" — ") };
+  logMeta(type, id, true, base ? "cinemeta + poster com badge" : "só dados do site (Cinemeta falhou)");
   return { meta, cacheMaxAge: 3600 };
 });
 
@@ -296,6 +304,9 @@ app.get("/poster/:list/:imdb.jpg", async (req, res) => {
     res.redirect(item.poster); // fallback: poster original
   }
 });
+
+// Diagnóstico dos pedidos de ficha: mostra se o Stremio pergunta ao nosso addon
+app.get("/debug/meta", (req, res) => res.json({ metaProxy: META_PROXY, ...metaLog }));
 
 // Diagnóstico: /debug/released-movies, /debug/upcoming-series, ...
 app.get("/debug/:list", async (req, res) => {
