@@ -10,6 +10,9 @@ const PORT = process.env.PORT || 7000;
 const BASE_URL = (process.env.BASE_URL || `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
 const CACHE_MS = (parseInt(process.env.CACHE_MINUTES, 10) || 30) * 60 * 1000;
 const PAGE_SIZE = 100;
+// Responde também à "ficha" (meta) dos nossos títulos, devolvendo a do Cinemeta mas com o poster com badge.
+// Desligar com META_PROXY=0 (variável no Render).
+const META_PROXY = process.env.META_PROXY !== "0";
 const COUNTRY = (process.env.COUNTRY || "US").toUpperCase(); // país usado no TMDB para plataformas e lançamento digital
 const CHECK_MS = (parseInt(process.env.CHECK_HOURS, 10) || 24) * 60 * 60 * 1000;
 
@@ -89,20 +92,36 @@ function pruneMissingFuture(kind, upcomingRaw) {
 }
 
 // ---------- Cache das listas (scraping) ----------
+// - pedidos simultâneos à mesma página partilham uma única leitura;
+// - com cache expirada, responde logo com o que tem e atualiza em segundo plano (só o 1.º pedido após o arranque espera).
 const cache = {};
+const inflight = {};
+
+async function scrapeAndStore(key) {
+  const L = LISTS[key];
+  const items = await scrapeList(L.url, L.kind);
+  cache[key] = { items, time: Date.now() };
+  mergeIntoStore(items, L.kind); // tanto a Upcoming como a Released alimentam o histórico
+  if (L.phase === "upcoming") pruneMissingFuture(L.kind, items);
+  return items;
+}
+
+function refreshList(key) {
+  if (!inflight[key]) inflight[key] = scrapeAndStore(key).finally(() => { delete inflight[key]; });
+  return inflight[key];
+}
+
 async function getRawList(key) {
   const c = cache[key];
-  if (c && Date.now() - c.time < CACHE_MS) return c.items;
-  const L = LISTS[key];
+  if (c) {
+    if (Date.now() - c.time >= CACHE_MS) refreshList(key).catch(e => console.error(`Erro a ler ${key}:`, e.message));
+    return c.items;
+  }
   try {
-    const items = await scrapeList(L.url, L.kind);
-    cache[key] = { items, time: Date.now() };
-    mergeIntoStore(items, L.kind); // tanto a Upcoming como a Released alimentam o histórico
-    if (L.phase === "upcoming") pruneMissingFuture(L.kind, items);
-    return items;
+    return await refreshList(key);
   } catch (e) {
     console.error(`Erro a ler ${key}:`, e.message);
-    return c ? c.items : [];
+    return [];
   }
 }
 
@@ -164,10 +183,10 @@ async function getList(key) {
 // ---------- Manifest ----------
 const manifest = {
   id: "community.dracid.lists.custom",
-  version: "3.1.0",
+  version: "3.2.0",
   name: "Dracid's Lists (custom)",
   description: "Listas de lançamentos digitais (filmes e séries) com badges de plataforma/data; os títulos passam para Released no dia do lançamento",
-  resources: ["catalog"],
+  resources: META_PROXY ? ["catalog", { name: "meta", types: ["movie", "series"], idPrefixes: ["tt"] }] : ["catalog"],
   types: ["movie", "series"],
   catalogs: Object.entries(LISTS).map(([id, l]) => ({
     type: l.kind,
@@ -197,6 +216,53 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
   }));
 
   return { metas, cacheMaxAge: info.enriching ? 60 : 1800 };
+});
+
+// ---------- Ficha (meta): Cinemeta + poster com badge ----------
+const metaCache = new Map();
+async function cinemetaMeta(type, id) {
+  const key = type + id;
+  const c = metaCache.get(key);
+  if (c && Date.now() - c.time < 6 * 3600 * 1000) return c.meta;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const res = await fetch(`https://v3-cinemeta.strem.io/meta/${type}/${id}.json`, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const meta = (await res.json()).meta || null;
+    if (meta) {
+      if (metaCache.size > 300) metaCache.delete(metaCache.keys().next().value);
+      metaCache.set(key, { meta, time: Date.now() });
+    }
+    return meta;
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+builder.defineMetaHandler(async ({ type, id }) => {
+  if (!META_PROXY) return { meta: null };
+  await ensureLoaded();
+
+  // Só trata dos títulos das nossas listas; os outros ficam para os restantes addons (resposta imediata)
+  let item = store.items[id];
+  let list = null;
+  if (item && item.kind === type) list = listKey(type, "released");
+  else {
+    const upcoming = (cache[listKey(type, "upcoming")] || {}).items || [];
+    item = upcoming.find(i => i.id === id);
+    if (item) list = listKey(type, "upcoming");
+  }
+  if (!item || !list || !item.poster) return { meta: null };
+
+  const poster = `${BASE_URL}/poster/${list}/${id}.jpg`;
+  const base = await cinemetaMeta(type, id);
+  const meta = base
+    ? { ...base, poster }
+    : { id, type, name: item.title, poster, description: [item.platform, item.synopsis].filter(Boolean).join(" — ") };
+  return { meta, cacheMaxAge: 3600 };
 });
 
 // ---------- Servidor ----------
