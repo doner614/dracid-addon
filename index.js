@@ -14,6 +14,11 @@ const PAGE_SIZE = 100;
 // Desligar com META_PROXY=0 (variável no Render).
 const META_PROXY = process.env.META_PROXY !== "0";
 const COUNTRY = (process.env.COUNTRY || "US").toUpperCase(); // país usado no TMDB para plataformas e lançamento digital
+// IDs IMDb a nunca mostrar na Released (para corrigir à mão um erro): EXCLUDE_IDS=tt1234567,tt7654321
+const EXCLUDE = new Set((process.env.EXCLUDE_IDS || "").split(",").map(x => x.trim()).filter(Boolean));
+// IDs IMDb a incluir à mão na Released (ex.: títulos que o Dracid tinha como VOD na Upcoming e que se perderam):
+// INCLUDE_IDS=tt1234567,tt7654321. Têm de constar na lista Released do Dracid; entram como "VOD" (ou com a plataforma que o site indicar).
+const INCLUDE = new Set((process.env.INCLUDE_IDS || "").split(",").map(x => x.trim()).filter(Boolean));
 const CHECK_MS = (parseInt(process.env.CHECK_HOURS, 10) || 24) * 60 * 60 * 1000;
 
 const SITE = "https://dracid77.github.io/lists";
@@ -64,29 +69,77 @@ function scheduleSave() {
 }
 
 const FIELDS = ["tmdbId", "title", "poster", "platform", "date", "synopsis"];
-function mergeIntoStore(items, kind) {
+const startOfTodayUtc = () => { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d.toISOString(); };
+
+// fromReleased: os itens vêm da lista Released do site. Se a data ainda for futura, o site já a considera lançada
+// (passou para Released antes da data): entra hoje, com data fixa, em vez de esperar pela data antiga.
+function mergeIntoStore(items, kind, fromReleased = false) {
   let changed = false;
   for (const it of items) {
     if (!it.platform) continue; // sem plataforma = cinema, não entra
     const prev = store.items[it.id];
-    if (!prev || prev.kind !== kind || prev.source === "tmdb" || FIELDS.some(f => prev[f] !== it[f])) { // o que o site marca tem prioridade sobre o TMDB
-      store.items[it.id] = { id: it.id, kind, ...Object.fromEntries(FIELDS.map(f => [f, it[f]])), source: "site", firstSeen: prev ? prev.firstSeen : new Date().toISOString() };
+    const future = new Date(it.date).getTime() > Date.now();
+    let date = it.date, fixedDate = false;
+    if (fromReleased && future) { date = prev && prev.fixedDate ? prev.date : startOfTodayUtc(); fixedDate = true; }
+    else if (prev && prev.fixedDate && !fromReleased) { date = prev.date; fixedDate = true; } // a Upcoming não repõe a data futura
+
+    const next = { id: it.id, kind, ...Object.fromEntries(FIELDS.map(f => [f, it[f]])), date, source: "site" };
+    if (fixedDate) next.fixedDate = true;
+    if (!prev || prev.kind !== kind || prev.source === "tmdb" || !!prev.fixedDate !== fixedDate || FIELDS.some(f => prev[f] !== next[f])) {
+      store.items[it.id] = { ...next, firstSeen: prev ? prev.firstSeen : new Date().toISOString() }; // o que o site marca tem prioridade sobre o TMDB
       changed = true;
     }
   }
   if (changed) scheduleSave();
 }
 
-// Se um título com data futura desaparece da Upcoming (adiado ou retirado), sai do histórico:
-// só passa para Released o que chegar à data de lançamento.
+// Título que já guardámos (com plataforma, vindo da Upcoming) e que o site já listou como lançado,
+// mesmo que lá apareça sem plataforma (acontece nos filmes): passa a lançado hoje.
+function markReleasedEarly(kind, releasedRaw) {
+  const ids = new Set(releasedRaw.map(i => i.id));
+  let changed = false;
+  for (const it of Object.values(store.items)) {
+    if (it.kind !== kind || !ids.has(it.id)) continue;
+    if (new Date(it.date).getTime() > Date.now()) { it.date = startOfTodayUtc(); it.fixedDate = true; delete it.missingSince; changed = true; }
+  }
+  if (changed) scheduleSave();
+}
+
+function applyIncludes(kind, releasedRaw) {
+  if (!INCLUDE.size) return;
+  let changed = false;
+  for (const it of releasedRaw) {
+    if (!INCLUDE.has(it.id)) continue;
+    const prev = store.items[it.id];
+    if (prev && prev.source === "site") continue; // o site já o marca com plataforma
+    const date = new Date(it.date).getTime() > Date.now() ? startOfTodayUtc() : it.date;
+    const next = { id: it.id, kind, tmdbId: it.tmdbId, title: it.title, poster: it.poster, platform: it.platform || "VOD", date, synopsis: it.synopsis, source: "manual" };
+    if (!prev || prev.source !== "manual" || prev.date !== date || prev.platform !== next.platform) {
+      store.items[it.id] = { ...next, firstSeen: prev ? prev.firstSeen : new Date().toISOString() };
+      changed = true;
+    }
+  }
+  if (changed) scheduleSave();
+}
+
+// Título com data futura que desaparece da Upcoming sem aparecer na Released (adiado/retirado):
+// só sai do histórico ao fim de 6 horas, para dar tempo à lista Released de o mostrar.
 function pruneMissingFuture(kind, upcomingRaw) {
   if (upcomingRaw.length < 10) return; // leitura suspeita (página vazia/alterada): não apaga nada
   const present = new Set(upcomingRaw.map(i => i.id));
-  const limit = Date.now() + 36 * 3600 * 1000;
+  const releasedIds = new Set(((cache[listKey(kind, "released")] || {}).items || []).map(i => i.id));
+  const now = Date.now();
+  const limit = now + 36 * 3600 * 1000;
   let changed = false;
   for (const [id, it] of Object.entries(store.items)) {
     if (it.kind !== kind || it.source === "tmdb") continue;
-    if (new Date(it.date).getTime() > limit && !present.has(id)) { delete store.items[id]; changed = true; }
+    const farFuture = new Date(it.date).getTime() > limit;
+    if (!farFuture || present.has(id) || releasedIds.has(id)) {
+      if (it.missingSince) { delete it.missingSince; changed = true; }
+      continue;
+    }
+    if (!it.missingSince) { it.missingSince = new Date().toISOString(); changed = true; }
+    else if (now - new Date(it.missingSince).getTime() >= 6 * 3600 * 1000) { delete store.items[id]; changed = true; }
   }
   if (changed) scheduleSave();
 }
@@ -101,8 +154,9 @@ async function scrapeAndStore(key) {
   const L = LISTS[key];
   const items = await scrapeList(L.url, L.kind);
   cache[key] = { items, time: Date.now() };
-  mergeIntoStore(items, L.kind); // tanto a Upcoming como a Released alimentam o histórico
+  mergeIntoStore(items, L.kind, L.phase === "released"); // tanto a Upcoming como a Released alimentam o histórico
   if (L.phase === "upcoming") pruneMissingFuture(L.kind, items);
+  else { markReleasedEarly(L.kind, items); applyIncludes(L.kind, items); }
   return items;
 }
 
@@ -133,7 +187,15 @@ const info = { enriching: false, done: 0, total: 0, lastError: null };
 async function enrichReleased(raw) {
   if (!tmdb.enabled || info.enriching) return;
   const now = Date.now();
-  const todo = raw.filter(i => !i.platform && i.tmdbId && !store.items[i.id] && !(store.checked[i.id] && now - store.checked[i.id] < CHECK_MS));
+  // Candidatos: sem plataforma no site e (ainda não vistos, ou já vindos do TMDB e a precisar de nova verificação).
+  // Os que vieram do TMDB com regras antigas (sem "rule: 2") voltam a ser verificados já.
+  const todo = raw.filter(i => {
+    if (i.platform || !i.tmdbId) return false;
+    const stale = !(store.checked[i.id] && now - store.checked[i.id] < CHECK_MS);
+    const s = store.items[i.id];
+    if (!s) return stale;
+    return s.source === "tmdb" && (s.rule !== 2 || stale);
+  });
   if (!todo.length) return;
 
   Object.assign(info, { enriching: true, done: 0, total: todo.length });
@@ -145,11 +207,15 @@ async function enrichReleased(raw) {
         const r = await tmdb.lookup(it.tmdbId, COUNTRY);
         store.checked[it.id] = Date.now();
         changed = true;
+        const prev = store.items[it.id];
         if (r.platform) {
           store.items[it.id] = {
             id: it.id, kind: "movie", tmdbId: it.tmdbId, title: it.title, poster: it.poster, platform: r.platform,
-            date: r.digitalDate || it.date, synopsis: it.synopsis, source: "tmdb", firstSeen: new Date().toISOString()
+            date: r.digitalDate || it.date, synopsis: it.synopsis, source: "tmdb", rule: 2,
+            firstSeen: prev ? prev.firstSeen : new Date().toISOString()
           };
+        } else if (prev && prev.source === "tmdb") {
+          delete store.items[it.id]; // já não cumpre: sem versão digital confirmada
         }
       } catch (e) {
         info.lastError = e.message;
@@ -176,7 +242,7 @@ async function getList(key) {
 
   // Released: tudo o que o histórico tem com data já passada, do mais recente para o mais antigo
   return Object.values(store.items)
-    .filter(i => i.kind === L.kind && isPast(i))
+    .filter(i => i.kind === L.kind && isPast(i) && !EXCLUDE.has(i.id))
     .sort((a, b) => b.date.localeCompare(a.date) || (a.title || "").localeCompare(b.title || ""));
 }
 
@@ -307,6 +373,30 @@ app.get("/poster/:list/:imdb.jpg", async (req, res) => {
 
 // Diagnóstico dos pedidos de ficha: mostra se o Stremio pergunta ao nosso addon
 app.get("/debug/meta", (req, res) => res.json({ metaProxy: META_PROXY, ...metaLog }));
+
+// Procura um título: /debug/find?q=vision quest  (mostra onde está: histórico e listas do Dracid)
+app.get("/debug/find", (req, res) => {
+  const q = String(req.query.q || "").toLowerCase().trim();
+  if (!q) return res.json({ erro: "usa /debug/find?q=parte-do-titulo" });
+  const match = i => (i.title || "").toLowerCase().includes(q) || i.id === q;
+  const short = i => ({ id: i.id, kind: i.kind, title: i.title, platform: i.platform, date: i.date, source: i.source, fixedDate: i.fixedDate, missingSince: i.missingSince });
+  const onSiteLists = {};
+  for (const k of Object.keys(LISTS)) onSiteLists[k] = ((cache[k] || {}).items || []).filter(match).map(short);
+  res.json({
+    query: q,
+    history: Object.values(store.items).filter(match).map(short),
+    onSiteLists, // o que o scraper leu de cada lista do Dracid (vazio = não aparece ou não tem link IMDb)
+    tmdbChecked: Object.keys(store.checked).length
+  });
+});
+
+// Auditoria: filmes que entraram na Released por via do TMDB (para confirmares que não há filmes só de cinema)
+app.get("/debug/audit", (req, res) => {
+  const list = Object.values(store.items).filter(i => i.source === "tmdb")
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+    .map(i => ({ id: i.id, title: i.title, platform: i.platform, digitalDate: i.date, tmdbId: i.tmdbId, rule: i.rule }));
+  res.json({ fromTmdb: list.length, excluded: [...EXCLUDE], list });
+});
 
 // Diagnóstico: /debug/released-movies, /debug/upcoming-series, ...
 app.get("/debug/:list", async (req, res) => {

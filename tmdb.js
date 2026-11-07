@@ -34,9 +34,11 @@ function classify(data, country, now = new Date()) {
   const p = ((data["watch/providers"] || {}).results || {})[country] || {};
   const stream = (p.flatrate || []).find(x => !LIVE_TV.test(x.provider_name));
 
+  // Streaming por subscrição conta sempre. VOD (aluguer/compra) só conta com data digital já passada no país:
+  // ofertas de aluguer/compra sozinhas podem ser apenas pré-encomendas de filmes ainda em cinema.
   let platform = null;
   if (stream) platform = normalize(stream.provider_name);
-  else if ((p.rent && p.rent.length) || (p.buy && p.buy.length) || digitalHere) platform = "VOD";
+  else if (digitalHere) platform = "VOD";
 
   const best = digitalHere || digital[0];
   return { platform, digitalDate: platform && best ? best.time.toISOString() : null };
